@@ -1,0 +1,224 @@
+#!/usr/bin/env ruby
+%w(rexml/document net/http uri cgi).each { |f| require f }
+require 'yaml'
+include REXML
+
+require 'optparse'
+
+# Configuration
+
+PURLZ_PORT = 80
+
+
+config = YAML.load_file('/usr/local/islandora/flvc_purl_scripts/prospective/config.yml')
+
+PURLZ_ADDRESS  = config['purl_server']
+PURLZ_USERNAME = config['purl_username']
+PURLZ_PASSWORD = config['purl_password']
+
+# Convenience function for escaping CGI params
+
+def x(text); CGI.escape(text); end
+
+mode = :create
+
+id = nil
+target = nil
+maintainers = nil
+maintainerlist = 'fcla,flvc'
+type = '302'
+owning_institution = nil
+object_pid = nil
+
+opts   = OptionParser.new do |opt|
+  opt.banner = "Usage: load-prospective --purl purl --own owning_institution"
+  opt.on("-p", "--purl [PURL}", String, "purl to be created") do |p|
+    id = p
+  end
+  opt.on("-o", "--own [OWN]", String, "owning institution")  { |own| owning_institution = own }
+  opt.on("-i", "--pid [PID]", String, "Islandora object PID") { |pid| object_pid = pid }
+end
+opts.parse!(ARGV)
+
+if not id
+  print "No purl supplied.\n"
+  exit
+end
+if not owning_institution
+  print "No owning institution supplied.\n"
+  exit
+end
+if not object_pid
+  print "No Islandora object PID supplied.\n"
+  exit
+end
+
+
+
+target_site = owning_institution
+owning_inst_map = config['owning_inst_map']
+
+if owning_inst_map.has_key?(owning_institution)
+  target_site = owning_inst_map[owning_institution]
+end
+
+target_extension = config['target_extension']
+
+target = "http://#{target_site}#{target_extension}/islandora/object/#{x(object_pid)}"
+
+if owning_institution != 'flvc'
+    maintainerlist += ",#{owning_institution}"
+end
+
+maintainers = maintainerlist.split(',')
+
+@http = Net::HTTP.new(PURLZ_ADDRESS, PURLZ_PORT)
+
+
+# Log in and store authentication cookie for future use
+
+def log_in
+
+  auth_info = "id=#{x(PURLZ_USERNAME)}&passwd=#{x(PURLZ_PASSWORD)}"
+
+  @http.request_post('/admin/login/login-submit.bsh', auth_info) do |response|
+    raise "PURLZ login failed" if response['location'].include?('failure')
+    @session_key = response['set-cookie'][%r(session:([0-9A-F]+)), 1]
+  end
+end
+
+def cookies
+  {'Cookie' => 'NETKERNELSESSION=session:' + @session_key}
+end
+
+# Raises HTTPServerException unless response code is 200
+
+def create_purl(id, target, maintainers, type)
+  @http.request_post(
+    '/admin/purl' + id,
+    "target=#{x(target)}&maintainers=#{x(maintainers * ',')}&type=#{type}",
+    cookies
+  ).value
+end
+
+# Raises HTTPServerException unless response code is 200
+def modify_purl(id, target, maintainers, type)
+  @http.request_put(
+    '/admin/purl' + id +
+      "?target=#{x(target)}&maintainers=#{x(maintainers * ',')}&type=#{type}",
+    '', # Put has no body
+    {'Cookie' => 'NETKERNELSESSION=session:' + @session_key}
+  ).value
+end
+
+# Raises HTTPServerException unless response code is 200
+def delete_purl(id)
+  @http.delete(
+    '/admin/purl' + id,
+    {'Cookie' => 'NETKERNELSESSION=session:' + @session_key}
+  ).value
+end
+
+# Parses tab-separated stream and yields each PURL to the calling block
+class File
+  def each_purl
+    until eof?
+      id, type, maintainers, target = gets.chomp.split("\t")
+	  # split list of maintainers and separate with comma
+      maintainers = maintainers.split(',')
+      yield id, type, maintainers, target
+    end
+  end
+end
+
+
+log_in
+
+current_time = Time.new.to_s
+
+# puts id
+begin
+  case mode
+  when :create
+    begin
+      create_purl id, target, maintainers, type
+      STDERR.puts "[#{current_time}] purl created #{id} #{maintainerlist} #{target}"
+      puts "purl created #{id} #{maintainerlist} #{target}"
+    rescue Net::HTTPServerException => e
+      # PURL already exists, so modify it instead
+
+      # STDERR.puts "losering....",  e
+
+
+      ### FIRST Get document that is there ###
+      xml = Net::HTTP.get_response(URI.parse('http://' + PURLZ_ADDRESS + '/admin/purl' + id)).body
+
+      # STDERR.puts  xml
+      # load xml document
+      doc = REXML::Document.new(xml)
+
+      begin
+          # current list of maintainers
+          maintainList = String.new
+
+          doc.elements.each('purl/target/url') do |ele|
+                                        
+              # build list of maintainers from online resource
+              doc.elements.each('purl/maintainers/uid') do |uid|
+                  maintainList << uid.text + "\n"
+              end
+                                        
+              doc.elements.each('purl/maintainers/gid') do |gid|
+                  maintainList << gid.text + "\n"
+              end 
+
+              maintainList = maintainList.split
+
+              # helps normalize by removing extra white-space
+              maintainers.each { |x| x.strip! }
+
+              # place holder for any new maintainers not found online
+              maintainNew = Array.new
+                                                                                
+              maintainers.each do |x|
+                  boolFound = false
+                  maintainList.each do |y|
+                      if x.casecmp( y ) == 0
+                          boolFound = true
+                      end
+                  end
+                  if boolFound == false
+                      maintainNew << x
+                  end
+              end
+
+              # if some new maintainers were found
+              if maintainNew.length > 0
+                  # add to list of online maintainers
+                  maintainList.concat( maintainNew )
+
+                  # redirect reference to new combined list
+                  maintainers = maintainList
+              end
+                                        
+              # if targets are the same AND there are no new maintainers
+              if (ele.text .eql? target) && maintainNew.length == 0
+                  puts "purl #{id} target and maintainers are the same"
+              else
+                  modify_purl id, target, maintainers, type
+                  STDERR.puts "[#{current_time}] purl modified #{id} #{maintainerlist} #{target}"
+                  puts "purl modified #{id} #{maintainerlist} #{target}"
+              end
+          end
+      end
+
+    end
+  when :delete
+    delete_purl id
+    STDERR.puts "purl deleted #{id} #{maintainerlist} #{target}"
+    puts "purl deleted #{id} #{maintainerlist} #{target}"
+  end
+rescue Exception => e
+  STDERR.puts "[#{current_time}] purl #{id} " + e.to_s
+  puts 'PURLERROR ' + id + '  ' + e.to_s
+end

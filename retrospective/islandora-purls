@@ -1,0 +1,128 @@
+#!/usr/bin/php
+
+<?php
+
+$longopts = array("server:", "target:", "root:", "own:", "collection:", "outfile:",);
+$options = getopt("",$longopts);
+//print_r($options);
+
+$server = "";
+$site = "";
+$root = "";
+$owning_inst = "";
+$collection = "";
+$outfile = "";
+
+if (isset($options['server'])) {
+  if ($options['server'] == "7d") $server = "islandora7d";
+  else if ($options['server'] == "7t") $server = "islandora7t";
+  else if ($options['server'] == "7p") $server = "islandorap";
+  else {
+    print "Server options are 7d 7t 7p\n";
+    return;
+  }
+}
+else {
+  print "Required parameter --server is missing.  Options are 7d 7t 7p\n";
+  return;
+}
+
+if (isset($options['target'])) {
+  $target = $options['target'];
+}
+else {
+  print "Required parameter --target is missing.\n";
+  return;
+}
+
+if (isset($options['outfile']))
+  $outfile = $options['outfile'];
+else {
+  print "Required parameter --outfile is missing.\n";
+  return;
+}
+
+if (isset($options['root'])) {
+  $root = "info\:fedora/" . str_replace(":","\:",$options['root']);
+}
+//else {
+//  print "Required parameter --root is missing.";
+//  return;
+//}
+
+if (isset($options['own'])) {
+  $owning_inst = $options['own'];
+}
+
+if (isset($options['collection'])) {
+  $collection = "info\:fedora/" . str_replace(":","\:",$options['collection']);
+}
+
+if (empty($root) && empty($owning_inst) && empty($collection)) {
+  print "Must specify one of either --root, --own, or --collection\n";
+  return;
+}
+
+
+//$solr_url = "http://localhost:8080/solr/select/?version=2.2&start=0&rows=10000&indent=on&fl=PID+mods_location_url_ms";
+$base_solr_url = "http://" . $server . ".fcla.edu:8080/solr/select/?version=2.2&indent=on&fl=PID+mods_location_url_ms";
+$base_solr_url .= "&q=" . urlencode("timestamp:[* TO NOW]");
+//$base_solr_url .= "&fq=-RELS_EXT_hasModel_uri_ms:" . urlencode("info\:fedora/islandora\:pageCModel");
+//$base_solr_url .= "&fq=-RELS_EXT_hasModel_uri_ms:" . urlencode("info\:fedora/islandora\:newspaperPageCModel");
+//$base_solr_url .= "&fq=-RELS_EXT_hasModel_uri_ms:" . urlencode("info\:fedora/islandora\:newspaperIssueCModel");
+//$base_solr_url .= "&fq=-RELS_EXT_isConstituentOf_uri_mt:*";
+$base_solr_url .= "&fq=mods_location_url_mt:purl";
+if (strlen($root) > 0)
+    $base_solr_url .= "&fq=site_collection_id_ms:" . urlencode($root);
+if (strlen($owning_inst) > 0)
+    $base_solr_url .= "&fq=mods_extension_owningInstitution_mls:" . urlencode($owning_inst);
+if (strlen($collection) > 0)
+    $base_solr_url .= "&fq=RELS_EXT_isMemberOfCollection_uri_ms:" . urlencode($collection);
+
+
+// get the count
+$solr_url = $base_solr_url . "&start=0&rows=0";
+print $solr_url . "\n";
+$solr_results = simplexml_load_file($solr_url);
+$numfound = $solr_results->result['numFound'];
+print "numfound = " . $numfound . "\n";
+
+$object_count = 0;
+file_put_contents($outfile,"");
+
+while ($object_count < $numfound)
+{
+  $solr_url = $base_solr_url . "&start=" . $object_count . "&rows=10000";
+  print $solr_url . "\n";
+
+  $solr_results = simplexml_load_file($solr_url);
+  foreach ($solr_results->result->doc as $doc) {
+
+    //print $doc->str . ' ';
+    //$pid = $doc->str;
+
+    if ($doc->str->attributes()->name == 'PID') {
+      $pid = $doc->str;
+      //print $pid;
+    }
+
+    if ($doc->arr->attributes()->name == 'mods_location_url_ms') {
+       foreach ($doc->arr->str as $url) {
+         if ((strpos($url,'http://purl.flvc.org') !== false)||(strpos($url,'http://purl.fcla.edu') !== false)) {
+           $purl_entry = trim(str_replace("http://purl.fcla.edu","",str_replace("http://purl.flvc.org","",$url)));
+           if (strpos($purl_entry," ") === false) {
+             file_put_contents($outfile,$purl_entry . "\t302\tfcla\t" . "http://" . $target . "/islandora/object/" . urlencode($pid) . "\n",FILE_APPEND);
+           }
+         }
+       }
+    }
+
+    $object_count += 1;
+
+  }
+
+}
+
+print "\ncount = " . $object_count;
+
+?> 
