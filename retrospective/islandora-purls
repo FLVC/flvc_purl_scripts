@@ -2,7 +2,7 @@
 
 <?php
 
-$longopts = array("server:", "target:", "root:", "own:", "collection:", "outfile:",);
+$longopts = array("server:", "target:", "root:", "own:", "collection:", "outfile:", "maintainer:",);
 $options = getopt("",$longopts);
 //print_r($options);
 
@@ -12,6 +12,7 @@ $root = "";
 $owning_inst = "";
 $collection = "";
 $outfile = "";
+$maintainerlist = "flvc";
 
 if (isset($options['server'])) {
   if ($options['server'] == "7d") $server = "islandora7d";
@@ -63,6 +64,10 @@ if (empty($root) && empty($owning_inst) && empty($collection)) {
   return;
 }
 
+if (isset($options['maintainer'])) {
+  $maintainerlist = $maintainerlist . "," . $options['maintainer'];
+}
+
 
 //$solr_url = "http://localhost:8080/solr/select/?version=2.2&start=0&rows=10000&indent=on&fl=PID+mods_location_url_ms";
 $base_solr_url = "http://" . $server . ".fcla.edu:8080/solr/select/?version=2.2&indent=on&fl=PID+mods_location_url_ms";
@@ -111,7 +116,7 @@ while ($object_count < $numfound)
          if ((strpos($url,'http://purl.flvc.org') !== false)||(strpos($url,'http://purl.fcla.edu') !== false)) {
            $purl_entry = trim(str_replace("http://purl.fcla.edu","",str_replace("http://purl.flvc.org","",$url)));
            if (strpos($purl_entry," ") === false) {
-             file_put_contents($outfile,$purl_entry . "\t302\tfcla\t" . "http://" . $target . "/islandora/object/" . urlencode($pid) . "\n",FILE_APPEND);
+             file_put_contents($outfile,$purl_entry . "\t302\t" . $maintainerlist . "\thttp://" . $target . "/islandora/object/" . urlencode($pid) . "\n",FILE_APPEND);
            }
          }
        }
