@@ -2,7 +2,7 @@
 
 <?php
 
-$longopts = array("server:", "target:", "root:", "own:", "collection:", "outfile:", "maintainer:",);
+$longopts = array("server:", "target:", "root:", "own:", "collection:", "outfile:", "maintainer:", "date:",);
 $options = getopt("",$longopts);
 //print_r($options);
 
@@ -13,6 +13,7 @@ $owning_inst = "";
 $collection = "";
 $outfile = "";
 $maintainerlist = "flvc";
+$date = "";
 
 if (isset($options['server'])) {
   if ($options['server'] == "7d") $server = "islandora7d";
@@ -68,6 +69,9 @@ if (isset($options['maintainer'])) {
   $maintainerlist = $maintainerlist . "," . $options['maintainer'];
 }
 
+if (isset($options['date'])) {
+  $date = $options['date'];
+}
 
 //$solr_url = "http://localhost:8080/solr/select/?version=2.2&start=0&rows=10000&indent=on&fl=PID+mods_location_url_ms";
 $base_solr_url = "http://" . $server . ".fcla.edu:8080/solr/select/?version=2.2&indent=on&fl=PID+mods_location_url_ms";
@@ -83,7 +87,8 @@ if (strlen($owning_inst) > 0)
     $base_solr_url .= "&fq=mods_extension_owningInstitution_mls:" . urlencode($owning_inst);
 if (strlen($collection) > 0)
     $base_solr_url .= "&fq=RELS_EXT_isMemberOfCollection_uri_ms:" . urlencode($collection);
-
+if (strlen($date) > 0)
+    $base_solr_url .= "&fq=" . urlencode("fgs_lastModifiedDate_dt:[" . $date . "T00:00:00.000Z TO *]");
 
 // get the count
 $solr_url = $base_solr_url . "&start=0&rows=0";
